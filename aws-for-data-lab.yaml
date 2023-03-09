@@ -1,0 +1,1141 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Cloudformation Template for AWS Data Day Italy 30 Marzo 2023
+# Running the following command will configure Quicksight into your account: 
+# aws quicksight create-account-subscription --edition ENTERPRISE --authentication-method IAM_AND_QUICKSIGHT --aws-account-id XXXXXXXXXXXX --account-name quicksight-enterprise-reporting --notification-email XXXXXXXXXX --region us-east-1
+
+####################################################################################################################################
+####################################################################################################################################
+##############################################################Parameters############################################################
+####################################################################################################################################
+####################################################################################################################################
+Parameters:
+
+  AwsAccessKeyId:
+    Description: Access Key ID for the programmatic access (aws cli)
+    Type: String
+    
+  AwsSecretAccessKey:
+    Description: Access Key Value for the programmatic access (aws cli)
+    Type: String
+  
+  Region:
+    Description: Name of the Region es. eu-west-1
+    Type: String
+  
+  BHAdminRole:
+    Description: The name of an Admin Role
+    Type: String
+    
+  ClientPublicIPaddress:
+    Description: A single IPv4 address or range of IPv4 addresses with access to Bastion host on public subnet 
+    Type: String
+    Default: 0.0.0.0/32
+
+  IAMRoleDmsVpcExist:
+    Description: Does your AWS account already have dms-vpc-role(goto IAM>roles & search for "dms-vpc" to check) if this role is not there template will fail-rollback unless you change default Y to N?
+    Type: String
+    Default: N
+    AllowedValues:
+      - Y
+      - N
+
+  LatestAmiId:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: '/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2'
+
+  SourceBucket:
+    Description: S3 bucket which contains the source object
+    Default: aws-dataengineering-day.workshop.aws
+    Type: String
+
+  SourceKey:
+    Description: S3 Key which contains the source object
+    Default: dmslambda_v1.zip
+    Type: String
+
+  KeyName:
+    Description: Name of an existing EC2 KeyPair to enable RDP access to the EC2 instances
+    Type: AWS::EC2::KeyPair::KeyName
+    ConstraintDescription: must be the name of an existing EC2 KeyPair.
+
+Conditions:
+  IAMRoleDmsVpcExist: !Equals [!Ref IAMRoleDmsVpcExist, 'N']
+
+Resources:
+####################################################################################################################################
+####################################################################################################################################
+##############################################################Amazon S3#############################################################
+####################################################################################################################################
+####################################################################################################################################
+  S3BucketForRawData:
+    Type: 'AWS::S3::Bucket'
+    Properties:
+      AccessControl: BucketOwnerFullControl
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketName: !Sub "rawdata-${AWS::AccountId}-${AWS::Region}-awsdataday"
+
+  S3BucketForAgentsData:
+    Type: 'AWS::S3::Bucket'
+    DeletionPolicy: Delete
+    Properties:
+      BucketName: !Sub "agentsdata-${AWS::AccountId}-${AWS::Region}-awsdataday"
+
+  S3BucketForCustomerProfile:
+    Type: 'AWS::S3::Bucket'
+    DeletionPolicy: Delete
+    Properties:
+      BucketName: !Sub "customerprofile-${AWS::AccountId}-${AWS::Region}-awsdataday"
+
+
+####################################################################################################################################
+####################################################################################################################################
+##############################################################AWS Glue#############################################################
+####################################################################################################################################
+####################################################################################################################################
+
+# Create an AWS Glue database
+  AwsForDataDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        # Name: !Ref DatabaseName
+        Description: This database is created by Cloudformation Stack
+
+  MyGlueCrawlerRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - glue.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "s3:GetObject"
+                  - "s3:PutObject"
+                Resource:
+                  - !Sub "arn:aws:s3:::${S3BucketForAgentsData}/*"
+                  - !Sub "arn:aws:s3:::${S3BucketForCustomerProfile}/*"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+      Path: "/"
+
+  AgentsDataLogCrawler:
+    Type: AWS::Glue::Crawler
+    Properties:
+      Role: !GetAtt MyGlueCrawlerRole.Arn
+      DatabaseName: !Ref AwsForDataDatabase #Using the same Database
+      Targets:
+        S3Targets:
+          - Path: !Sub s3://${S3BucketForAgentsData}/AnalyticsData/
+      TablePrefix: awsfordata-
+      SchemaChangePolicy:
+        UpdateBehavior: "UPDATE_IN_DATABASE"
+        DeleteBehavior: "LOG"
+      Configuration: "{\"Version\":1.0,\"CrawlerOutput\":{\"Partitions\":{\"AddOrUpdateBehavior\":\"InheritFromTable\"},\"Tables\":{\"AddOrUpdateBehavior\":\"MergeNewColumns\"}}}"
+
+  CustomerProfileCrawler:
+    Type: AWS::Glue::Crawler
+    Properties:
+      Role: !GetAtt MyGlueCrawlerRole.Arn
+      DatabaseName: !Ref AwsForDataDatabase #Using the same Database
+      Targets:
+        S3Targets:
+          - Path: !Sub s3://${S3BucketForCustomerProfile}/revenuedb/
+      TablePrefix: awsfordata-
+      SchemaChangePolicy:
+        UpdateBehavior: "UPDATE_IN_DATABASE"
+        DeleteBehavior: "LOG"
+      Configuration: "{\"Version\":1.0,\"CrawlerOutput\":{\"Partitions\":{\"AddOrUpdateBehavior\":\"InheritFromTable\"},\"Tables\":{\"AddOrUpdateBehavior\":\"MergeNewColumns\"}}}"
+# 
+
+####################################################################################################################################
+####################################################################################################################################
+#############################################################Amazon VPC#############################################################
+####################################################################################################################################
+####################################################################################################################################
+  PubPrivateVPC:
+    Type: 'AWS::EC2::VPC'
+    Properties:
+      CidrBlock: 10.32.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-vpcDATADAY
+
+  PublicSubnet1:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      VpcId: !Ref PubPrivateVPC
+      AvailabilityZone: !Select [0, !GetAZs ]
+      CidrBlock: 10.32.1.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-snDATADAYPublic1
+
+  PublicSubnet2:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      VpcId: !Ref PubPrivateVPC
+      AvailabilityZone: !Select [1, !GetAZs ]
+      CidrBlock: 10.32.2.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-snDATADAYPublic2
+
+  PrivateSubnet1:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      VpcId: !Ref PubPrivateVPC
+      AvailabilityZone: !Select [0, !GetAZs ]
+      CidrBlock: 10.32.3.0/24
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-snDATADAYPrivate1
+
+  PrivateSubnet2:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      VpcId: !Ref PubPrivateVPC
+      AvailabilityZone: !Select [1, !GetAZs ]
+      CidrBlock: 10.32.4.0/24
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-snDATADAYPrivate2
+
+  PrivateSubnet3:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      VpcId: !Ref PubPrivateVPC
+      AvailabilityZone: !Select [2, !GetAZs ]
+      CidrBlock: 10.32.5.0/24
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-snDATADAYPrivate3
+
+  InternetGateway:
+    Type: 'AWS::EC2::InternetGateway'
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-igwDATADAY-"
+        - Key: Network
+          Value: Public
+
+  GatewayToInternet:
+    Type: 'AWS::EC2::VPCGatewayAttachment'
+    Properties:
+      VpcId: !Ref PubPrivateVPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicRouteTable:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref PubPrivateVPC
+      Tags:
+        - Key: Network
+          Value: Public
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-rtblDATADAYPublic
+
+  PublicRoute:
+    Type: 'AWS::EC2::Route'
+    DependsOn: GatewayToInternet
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteTableAssociation:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet2RouteTableAssociation:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  NatGateway:
+    Type: "AWS::EC2::NatGateway"
+    DependsOn: NatPublicIP
+    Properties: 
+      AllocationId: !GetAtt NatPublicIP.AllocationId
+      SubnetId: !Ref PublicSubnet1
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-ngwDATADAY
+
+  NatPublicIP:
+    Type: "AWS::EC2::EIP"
+    DependsOn: PubPrivateVPC
+    Properties:
+      Domain: vpc
+
+  PrivateRouteTable:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref PubPrivateVPC
+      Tags:
+        - Key: Network
+          Value: Private
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-rtblDATADAYPrivate
+    
+  PrivateRoute:
+    Type: 'AWS::EC2::Route'
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGateway
+
+  PrivateSubnet1RouteTableAssociation:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref PrivateSubnet1
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateSubnet2RouteTableAssociation:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref PrivateSubnet2
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateSubnet3RouteTableAssociation:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref PrivateSubnet3
+      RouteTableId: !Ref PrivateRouteTable
+
+####################################################################################################################################
+####################################################################################################################################
+###########################################################Amazon Redshift##########################################################
+####################################################################################################################################
+####################################################################################################################################
+
+  RedshiftSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: RedshiftSecret
+      Description: This is my Redshift Cluster secret
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "adminuser"}'
+        GenerateStringKey: password
+        PasswordLength: 16
+        ExcludePunctuation: true
+
+  RedshiftSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId: !Ref PubPrivateVPC
+      GroupDescription: Security group
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-RedshiftSecurityGroup
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 5439
+        ToPort: 5439
+        SourceSecurityGroupId: !Ref DMSSecurityGroup
+      - IpProtocol: tcp
+        FromPort: 5439
+        ToPort: 5439
+        SourceSecurityGroupId: !Ref PublicSecGroup
+        Description: Allow connect to Aurora PostgreSQL Cluster
+
+  RedshiftRuleDbSecGroupClusterIngressDMS:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Properties:
+      GroupId: !Ref RedshiftSecurityGroup 
+      FromPort: 0
+      ToPort: 65535
+      IpProtocol: tcp
+      SourceSecurityGroupId: !Ref RedshiftSecurityGroup
+
+  ClusterSubnetGroup:
+    Type: AWS::Redshift::ClusterSubnetGroup
+    Properties:
+      Description: RedshiftClusterSubnetGroup
+      SubnetIds: 
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+        - !Ref PrivateSubnet3
+
+  RedshiftParameterGroup:
+    Type: AWS::Redshift::ClusterParameterGroup
+    Properties:
+      Description: "ParameterGroup for AWS Data Day"
+      ParameterGroupFamily: redshift-1.0
+
+  RedshiftSpectrumS3Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          -
+            Effect: "Allow"
+            Principal:
+              Service:
+                - "redshift.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      RoleName: !Sub RedshiftSpectrumS3  
+
+  IAMPolicySpectrum:
+    Type: AWS::IAM::Policy
+    Properties: 
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - 's3:Get*'
+              - 's3:GetBucketLocation'
+              - 's3:GetObject'
+              - 's3:ListMultipartUploadParts'
+              - 's3:ListBucket'
+              - 's3:ListBucketMultipartUploads'
+            Resource: 
+              - !Sub 'arn:aws:s3:::awsdataday-rawdata-s3bucket-${AWS::AccountId}/*'
+              - !Sub 'arn:aws:s3:::awsdataday-rawdata-s3bucket-${AWS::AccountId}'
+          - Effect: Allow
+            Action:
+              - 'glue:CreateDatabase'
+              - 'glue:DeleteDatabase'
+              - 'glue:GetDatabase'
+              - 'glue:GetDatabases'
+              - 'glue:UpdateDatabase'
+              - 'glue:CreateTable'
+              - 'glue:DeleteTable'
+              - 'glue:BatchDeleteTable'
+              - 'glue:UpdateTable'
+              - 'glue:GetTable'
+              - 'glue:GetTables'
+              - 'glue:BatchCreatePartition'
+              - 'glue:CreatePartition'
+              - 'glue:DeletePartition'
+              - 'glue:BatchDeletePartition'
+              - 'glue:UpdatePartition'
+              - 'glue:GetPartition'
+              - 'glue:GetPartitions'
+              - 'glue:BatchGetPartition'
+            Resource: 
+              - '*'
+      PolicyName: !Sub "RedshiftSpectrumPolicy"
+      Roles: 
+        - !Ref RedshiftSpectrumS3Role
+
+  RedshiftKinesisRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - "redshift.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+
+  RedshiftKinesisPolicy:
+    Type: AWS::IAM::Policy
+    Properties: 
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action:
+              - 'kinesis:DescribeStreamSummary'
+              - 'kinesis:GetShardIterator'
+              - 'kinesis:GetRecords'
+              - 'kinesis:DescribeStream'
+            Resource: 
+              - !Sub 'arn:aws:kinesis:*:${AWS::AccountId}:stream/*'
+              - !Sub 'arn:aws:s3:::awsdataday-rawdata-s3bucket-${AWS::AccountId}'
+          - Effect: Allow
+            Action:
+              - 'kinesis:ListStreams'
+              - 'kinesis:ListShards'
+            Resource: 
+              - '*'
+      PolicyName: !Sub "RedshiftKinesisPolicy"
+      Roles: 
+        - !Ref RedshiftKinesisRole
+
+  DmsVpcRole:
+      Type: AWS::IAM::Role
+      Properties:
+        AssumeRolePolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+            - Effect: "Allow"
+              Principal:
+                Service:
+                  - "dms.amazonaws.com"
+              Action:
+                - "sts:AssumeRole"
+        ManagedPolicyArns:
+          - arn:aws:iam::aws:policy/service-role/AmazonDMSVPCManagementRole
+        RoleName: dms-vpc-role
+
+  DmsCloudwatchLogsRole:
+      Type: AWS::IAM::Role
+      Properties:
+        AssumeRolePolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+            - Effect: "Allow"
+              Principal:
+                Service:
+                  - "dms.amazonaws.com"
+              Action:
+                - "sts:AssumeRole"
+        ManagedPolicyArns:
+          - arn:aws:iam::aws:policy/service-role/AmazonDMSCloudWatchLogsRole
+        RoleName: dms-cloudwatch-logs-role 
+  
+  DmsAccessForEndpoint:
+      Type: AWS::IAM::Role
+      Properties:
+        AssumeRolePolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+            - Effect: "Allow"
+              Principal:
+                Service:
+                  - "dms.amazonaws.com"
+              Action:
+                - "sts:AssumeRole"
+            - Effect: "Allow"
+              Principal:
+                Service:
+                  - "redshift.amazonaws.com"
+              Action:
+                - "sts:AssumeRole"
+        ManagedPolicyArns:
+          - arn:aws:iam::aws:policy/service-role/AmazonDMSRedshiftS3Role
+        RoleName: dms-access-for-endpoint 
+
+  RedshiftVPCEndpoint:
+    Type: AWS::EC2::VPCEndpoint
+    Properties: 
+      SecurityGroupIds: 
+        - !Ref RedshiftSecurityGroup
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.redshift'
+      SubnetIds: 
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+        - !Ref PrivateSubnet3
+      VpcEndpointType: Interface
+      VpcId: !Ref PubPrivateVPC
+
+  RedshiftCluster:
+    Type: AWS::Redshift::Cluster
+    DependsOn:
+      - PubPrivateVPC
+      - InternetGateway
+      - RedshiftSecurityGroup
+      - ClusterSubnetGroup
+      - RedshiftParameterGroup
+      - RedshiftSpectrumS3Role
+    Properties:
+      ClusterType: 'multi-node'
+      NumberOfNodes: 2
+      NodeType: ra3.4xlarge
+      DBName: sportstickets
+      IamRoles:
+        - !Sub 'arn:aws:iam::${AWS::AccountId}:role/${RedshiftSpectrumS3Role}'
+      MasterUsername: !Sub "{{resolve:secretsmanager:${RedshiftSecret}::username}}"
+      MasterUserPassword: !Sub "{{resolve:secretsmanager:${RedshiftSecret}::password}}"
+      PubliclyAccessible: false
+      Port: 5439
+      VpcSecurityGroupIds:
+        - !Ref RedshiftSecurityGroup
+      ClusterSubnetGroupName: !Ref ClusterSubnetGroup
+      AllowVersionUpgrade: false
+      ClusterParameterGroupName: !Ref RedshiftParameterGroup
+      Tags:
+      - Key: Name
+        Value: 'AWSDataDay'
+
+####################################################################################################################################
+####################################################################################################################################
+#########################################################Amazon Aurora PostgreSQL###################################################
+####################################################################################################################################
+####################################################################################################################################
+
+  AuroraSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: AuroraSecret
+      Description: This is my Aurora Cluster secret
+      GenerateSecretString:
+        SecretStringTemplate: '{"username": "adminuser"}'
+        GenerateStringKey: password
+        PasswordLength: 16
+        ExcludePunctuation: true
+
+## Create DB subnet group
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: !Sub Subnet Group for ${AWS::StackName}
+      SubnetIds: 
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+        - !Ref PrivateSubnet3
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-dbsubnetgroup
+
+  PublicSecGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      VpcId: !Ref PubPrivateVPC
+      GroupDescription: allow connections from specified CIDR ranges
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-PublicSecurityGroup
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 80
+        ToPort: 80
+        CidrIp: !Ref ClientPublicIPaddress
+      - IpProtocol: tcp
+        FromPort: 22
+        ToPort: 22
+        CidrIp: !Ref ClientPublicIPaddress
+      - IpProtocol: tcp
+        FromPort: 3389
+        ToPort: 3389
+        CidrIp: !Ref ClientPublicIPaddress
+        Description: Allows RDP access   
+        
+  AuroraSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    DependsOn:
+      - DMSSecurityGroup
+    Properties:
+      VpcId: !Ref PubPrivateVPC
+      GroupDescription: Allow connect to Aurora PostgreSQL Cluster
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-AuroraSecurityGroup
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 5432
+        ToPort: 5432
+        SourceSecurityGroupId: !Ref PublicSecGroup
+        Description: Allow connect to Aurora PostgreSQL Cluster
+      - IpProtocol: tcp
+        FromPort: 5432
+        ToPort: 5432
+        SourceSecurityGroupId: !Ref DMSSecurityGroup
+        Description: Allow connect to Aurora PostgreSQL Cluster from DMS
+
+  AuroraruleDbSecGroupClusterIngressSelf:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Properties:
+      GroupId: !Ref AuroraSecurityGroup 
+      FromPort: 0
+      ToPort: 65535
+      IpProtocol: tcp
+      SourceSecurityGroupId: !Ref AuroraSecurityGroup
+
+  AuroraClusterDBPG:
+    Type: AWS::RDS::DBClusterParameterGroup
+    Properties:
+      DBClusterParameterGroupName: custom-aurora-pg-14
+      Description: Parameter for Aurora Cluster to enable logical replication
+      Family: aurora-postgresql14
+      Parameters:
+        rds.logical_replication: '1'
+        wal_sender_timeout: '0'
+        max_wal_senders: '20'
+        max_replication_slots: '50'
+        
+  AuroraPGCluster:
+    Type: AWS::RDS::DBCluster
+    DependsOn:
+      - PubPrivateVPC
+      - DBSubnetGroup
+      - PublicSecGroup
+      - AuroraSecurityGroup
+    DeletionPolicy: Delete
+    Properties:
+      Tags:
+      - Key: Name
+        Value: !Sub "AuroraPGCluster${AWS::StackName}"
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      DBClusterParameterGroupName: !Ref AuroraClusterDBPG
+      VpcSecurityGroupIds: 
+        - !GetAtt AuroraSecurityGroup.GroupId
+      Engine: aurora-postgresql
+      EngineMode: provisioned
+      EngineVersion: 14.6
+      Port: 5432
+      DatabaseName: sportstickets
+      MasterUsername: !Sub "{{resolve:secretsmanager:${AuroraSecret}::username}}"
+      MasterUserPassword: !Sub "{{resolve:secretsmanager:${AuroraSecret}::password}}"
+ 
+  AuroraPGInstance:
+    Type: AWS::RDS::DBInstance
+    DependsOn: 
+    - AuroraPGCluster
+    DeletionPolicy: Delete
+    Properties:
+      Tags:
+      - Key: Name
+        Value: !Sub "AuroraPGInstance${AWS::StackName}"
+      DBClusterIdentifier: !Ref AuroraPGCluster
+      DBInstanceIdentifier: !Sub "AuroraPGInstance${AWS::StackName}"
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      DBInstanceClass: db.r6g.xlarge
+      Engine: aurora-postgresql
+      LicenseModel: postgresql-license
+      PubliclyAccessible: false
+
+###############################################################################################################
+###############################################################################################################
+#########################################################EC2###################################################
+###############################################################################################################
+###############################################################################################################
+
+  BHInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties: 
+      InstanceProfileName: bh-ec2-instance-profile
+      Path: /
+      Roles: 
+       - !Ref BHAdminRole
+
+  bastionHost:
+    Type: AWS::EC2::Instance
+    Properties:
+      DisableApiTermination: false
+      InstanceInitiatedShutdownBehavior: stop
+      EbsOptimized: true
+      Monitoring: false
+      SubnetId: !Ref PublicSubnet1
+      ImageId: !Ref LatestAmiId
+      InstanceType: "m5.2xlarge"
+      KeyName: !Ref KeyName
+      SecurityGroupIds: [!Ref PublicSecGroup]
+      IamInstanceProfile: !Ref BHInstanceProfile
+      UserData:
+        Fn::Base64: !Sub |
+          Content-Type: multipart/mixed; boundary="//"
+          MIME-Version: 1.0
+          --//
+          Content-Type: text/cloud-config; charset="us-ascii"
+          MIME-Version: 1.0
+          Content-Transfer-Encoding: 7bit
+          Content-Disposition: attachment; filename="cloud-config.txt"
+          #cloud-config
+          cloud_final_modules:
+          - [scripts-user, always]
+          --//
+          Content-Type: text/x-shellscript; charset="us-ascii"
+          MIME-Version: 1.0
+          Content-Transfer-Encoding: 7bit
+          Content-Disposition: attachment; filename="userdata.txt"
+          #!/bin/bash -xe
+          yum install -y git
+          yum install -y jq
+          yum update -y
+          amazon-linux-extras install -y epel
+          echo " " >> /etc/yum.repos.d/pgdg.repo
+          echo "[pgdg14]" >> /etc/yum.repos.d/pgdg.repo
+          echo "name=PostgreSQL 14 for RHEL/CentOS 7 - x86_64" >> /etc/yum.repos.d/pgdg.repo
+          echo "baseurl=http://download.postgresql.org/pub/repos/yum/14/redhat/rhel-7-x86_64" >> /etc/yum.repos.d/pgdg.repo
+          echo "enabled=1" >> /etc/yum.repos.d/pgdg.repo
+          echo "gpgcheck=0" >> /etc/yum.repos.d/pgdg.repo
+          echo " " >> /etc/yum.repos.d/pgdg.repo
+          yum makecache
+          yum install -y postgresql14
+          yum update -y
+          cd /home/ec2-user
+          git clone https://gitlab.aws.dev/aws-for-data1/AWSforDataDayMilan2023Q1.git
+          cd /home/ec2-user
+          sudo chown -R ec2-user:ec2-user AWSforDataDayMilan2023Q1/
+          cd AWSforDataDayMilan2023Q1/PostgreSQL/sampledb/v1/
+          aws configure set aws_access_key_id ${AwsAccessKeyId}
+          aws configure set aws_secret_access_key ${AwsSecretAccessKey}
+          echo "region = "${Region} >> /root/.aws/credentials
+          secret='AuroraSecret'
+          export PGPASSWORD=$(aws secretsmanager get-secret-value --secret-id $secret | jq --raw-output '.SecretString' | jq -r .password)
+          export PGUSER=$(aws secretsmanager get-secret-value --secret-id $secret | jq --raw-output '.SecretString' | jq -r .username)
+          cd /home/ec2-user/AWSforDataDayMilan2023Q1/PostgreSQL/sampledb/v1/
+          nohup psql --host=${AuroraPGCluster.Endpoint.Address} --port=5432 --dbname=sportstickets -f install-postgresql.sql &
+          secret='RedshiftSecret'
+          export PGPASSWORD=$(aws secretsmanager get-secret-value --secret-id $secret | jq --raw-output '.SecretString' | jq -r .password)
+          export PGUSER=$(aws secretsmanager get-secret-value --secret-id $secret | jq --raw-output '.SecretString' | jq -r .username)
+          cd /home/ec2-user/AWSforDataDayMilan2023Q1/Redshift/sampledb/v1/
+          nohup psql --host=${RedshiftCluster.Endpoint.Address} --port=5439 --dbname=sportstickets -f install-redshift.sql &
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName}-bastion-host
+
+##################################################################################################################
+##################################################################################################################
+#########################################################Lambda###################################################
+##################################################################################################################
+##################################################################################################################
+
+  DMSLabCFNS3Bucket:
+    Type: 'AWS::S3::Bucket'
+
+  LambdaCopySourceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: LambdaCopySourceRolePolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub arn:aws:s3:::${SourceBucket}/*
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource: !Sub arn:aws:s3:::${DMSLabCFNS3Bucket}/*
+              - Effect: Allow
+                Action: logs:CreateLogGroup
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:*
+
+  LambdaCopySource:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.handler
+      Role: !GetAtt LambdaCopySourceRole.Arn
+      Code:
+        ZipFile: !Sub |
+          import os
+          import json
+          import cfnresponse
+          import boto3
+          from botocore.exceptions import ClientError
+          s3 = boto3.client('s3')
+          import logging
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+          def handler(event, context):
+              logger.info("Received event: %s" % json.dumps(event))
+              source_bucket = '${SourceBucket}'
+              source_prefix = '${SourceKey}'
+              bucket = '${DMSLabCFNS3Bucket}'
+              prefix = '${SourceKey}'
+              result = cfnresponse.SUCCESS
+              try:
+                  if event['RequestType'] == 'Create' or event['RequestType'] == 'Update':
+                      copy_source = {'Bucket': source_bucket, 'Key': source_prefix}
+                      s3.copy(copy_source, bucket, prefix)
+                  elif event['RequestType'] == 'Delete':
+                      s3.delete_object(Bucket=bucket, Key=prefix)
+              except ClientError as e:
+                  logger.error('Error: %s', e)
+                  result = cfnresponse.FAILED
+              cfnresponse.send(event, context, result, {})
+      Runtime: python3.8
+      Timeout: 60
+
+  CopySourceObject:
+    Type: "Custom::CopySourceObject"
+    Properties:
+      ServiceToken: !GetAtt LambdaCopySource.Arn
+
+  GenerateCDCData:
+    Type: AWS::Lambda::Function
+    DependsOn: CopySourceObject
+    Properties:
+      Code:
+        S3Bucket: !Ref DMSLabCFNS3Bucket
+        S3Key: !Ref SourceKey
+      Description: Function to generate CDC data
+      FunctionName: GenerateCDCData
+      Handler: index.handler
+      MemorySize: 128
+      Runtime: nodejs12.x
+      Timeout: 300
+      Environment:
+        Variables:
+          HOST: !GetAtt AuroraPGCluster.Endpoint.Address
+      Role: !GetAtt LambdaExecutionRole.Arn
+      VpcConfig:
+        SecurityGroupIds:
+          - !GetAtt DMSSecurityGroup.GroupId
+        SubnetIds:
+          - !Ref PublicSubnet1
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        -
+          PolicyName: AWSDataDayAuroraAccess
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              -
+                Sid: AuroraAccess
+                Effect: Allow
+                Action:
+                  - rds:*
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - ec2:CreateNetworkInterface
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DeleteNetworkInterface
+                Resource: "*"
+
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: LambdaRolePolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: s3:DeleteObject
+                Resource: !Sub arn:aws:s3:::${DMSLabCFNS3Bucket}/*
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !Sub arn:aws:s3:::${DMSLabCFNS3Bucket}
+              - Effect: Allow
+                Action: logs:CreateLogGroup
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:*
+
+  S3BucketHandler:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: index.handler
+      Role: !GetAtt LambdaRole.Arn
+      Code:
+        ZipFile: !Sub |
+          import os
+          import json
+          import cfnresponse
+          import boto3
+          from botocore.exceptions import ClientError
+          s3 = boto3.resource('s3')
+          def handler(event, context):
+              print("Received event: %s" % json.dumps(event))
+              s3_bucket = s3.Bucket(event['ResourceProperties']['Bucket'])
+              try:
+                  if event['RequestType'] == 'Create' or event['RequestType'] == 'Update':
+                      result = cfnresponse.SUCCESS
+                  elif event['RequestType'] == 'Delete':
+                      s3_bucket.objects.delete()
+                      result = cfnresponse.SUCCESS
+              except ClientError as e:
+                  print('Error: %s', e)
+                  result = cfnresponse.FAILED
+              cfnresponse.send(event, context, result, {})
+      Runtime: python3.8
+      Timeout: 300
+
+  EmptyDMSLabCFNS3Bucket:
+    Type: "Custom::EmptyDMSLabCFNS3Bucket"
+    Properties:
+      ServiceToken: !GetAtt S3BucketHandler.Arn
+      Bucket: !Ref DMSLabCFNS3Bucket
+
+####################################################################################################################################
+####################################################################################################################################
+################################################################DMS#################################################################
+####################################################################################################################################
+####################################################################################################################################
+      
+  ReplicationInstanceSubnetGroup:
+    Type: AWS::DMS::ReplicationSubnetGroup
+    Properties:
+      ReplicationSubnetGroupDescription: !Sub '${AWS::StackName} DMS Subnet Group'
+      SubnetIds: 
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+        - !Ref PrivateSubnet3
+      Tags:
+          - Key: Name
+            Value: !Sub '${AWS::StackName}-dms-subnet-group'
+
+  DMSSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      VpcId: !Ref PubPrivateVPC
+      GroupDescription: DMS Security Group
+      Tags:
+      - Key: Name
+        Value: !Sub ${AWS::StackName}-DMSSecurityGroup
+   
+  RepInstance:
+    Type: AWS::DMS::ReplicationInstance
+    DependsOn: 
+      - ReplicationInstanceSubnetGroup
+    Properties:
+      AllocatedStorage: 250
+      AutoMinorVersionUpgrade: false
+      EngineVersion:  3.4.7
+      MultiAZ: false
+      PubliclyAccessible: false
+      ReplicationInstanceClass: dms.c6i.2xlarge
+      ReplicationSubnetGroupIdentifier: !Ref ReplicationInstanceSubnetGroup
+      VpcSecurityGroupIds: 
+      - !Ref DMSSecurityGroup
+      - !Ref AuroraSecurityGroup
+
+  S3GatewayEndpoint:
+    Type: 'AWS::EC2::VPCEndpoint'
+    Properties:
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action:
+              - 's3:GetObject'
+              - 's3:PutObject'
+              - 's3:DeleteObject'
+              - 's3:PutObjectTagging'
+              - 's3:ListBucket'
+            Resource:
+              - 'arn:aws:s3:::*'
+            Condition:
+              StringEquals:
+                aws:sourceVpc: !Ref PubPrivateVPC
+      RouteTableIds:
+        - !Ref PublicRouteTable 
+      ServiceName: !Sub 'com.amazonaws.${AWS::Region}.s3'
+      VpcId: !Ref PubPrivateVPC
+
+  AuroraEndpointSource:
+    Type: AWS::DMS::Endpoint
+    DependsOn:
+      - AuroraPGCluster
+    Properties: 
+      DatabaseName: sportstickets
+      EndpointType: source
+      EngineName: aurora-postgresql
+      Username: !Sub "{{resolve:secretsmanager:${AuroraSecret}::username}}"
+      Password: !Sub "{{resolve:secretsmanager:${AuroraSecret}::password}}"
+      Port: 5432
+      ServerName: !GetAtt AuroraPGCluster.Endpoint.Address
+  
+  RedshiftEndpointTarget:
+    Type: AWS::DMS::Endpoint
+    DependsOn:
+      - RedshiftCluster
+    Properties: 
+      DatabaseName: sportstickets
+      EndpointType: target
+      EngineName: redshift
+      Username: !Sub "{{resolve:secretsmanager:${RedshiftSecret}::username}}"
+      Password: !Sub "{{resolve:secretsmanager:${RedshiftSecret}::password}}"
+      Port: 5439
+      ServerName: !GetAtt RedshiftCluster.Endpoint.Address
+
+  DmsReplicationTaskAuroraToRedshift:
+    Type: AWS::DMS::ReplicationTask
+    Properties:
+        MigrationType: full-load-and-cdc
+        ReplicationInstanceArn: !Ref RepInstance
+        ReplicationTaskIdentifier: !Sub '${AWS::StackName}-dms-repl-task'
+        ReplicationTaskSettings: "{ \"FullLoadSettings\": { \"TargetTablePrepMode\": \"DO_NOTHING\" }, \"Logging\": { \"EnableLogging\": true } }"
+        SourceEndpointArn: !Ref AuroraEndpointSource
+        TargetEndpointArn: !Ref RedshiftEndpointTarget
+        TableMappings: "{ \"rules\": [ { \"rule-type\": \"selection\", \"rule-id\": \"1\", \"rule-name\": \"1\", \"object-locator\": { \"schema-name\": \"dms_sample\", \"table-name\": \"%\" }, \"rule-action\": \"include\" } ] }"        
+
+
+####################################################################################################################################
+####################################################################################################################################
+##############################################################Outputs###############################################################
+####################################################################################################################################
+####################################################################################################################################
+
+Outputs:
+  S3BucketForRawData:
+    Description: S3 Bucket Name
+    Value: !Ref S3BucketForRawData
+  S3BucketForAgentsData:
+    Description: S3 Bucket Name
+    Value: !Ref S3BucketForAgentsData
+  S3BucketForCustomerProfile:
+    Description: S3 Bucket Name
+    Value: !Ref S3BucketForCustomerProfile
+  AuroraClusterEndpoint:
+    Value: !GetAtt AuroraPGCluster.Endpoint.Address
+    Export:
+      Name: !Sub AWSDataDay-AuroraClusterEndpointAddress
+  RedshiftClusterEndpoint:
+    Value: !GetAtt RedshiftCluster.Endpoint.Address
+    Export:
+      Name: !Sub AWSDataDay-RedshiftClusterEndpointAddress
