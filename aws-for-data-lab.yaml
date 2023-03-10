@@ -1232,19 +1232,19 @@ Resources:
           cd /home/ec2-user
           git clone https://github.com/aws-samples/online-ticket-demo-store.git
           cd /home/ec2-user
-          sudo chown -R ec2-user:ec2-user aws-samples/
+          sudo chown -R ec2-user:ec2-user online-ticket-demo-store/
           aws configure set aws_access_key_id ${AwsAccessKeyId}
           aws configure set aws_secret_access_key ${AwsSecretAccessKey}
           echo "region = "${Region} >> /root/.aws/credentials
           secret='AuroraSecret'
           export PGPASSWORD=$(aws secretsmanager get-secret-value --secret-id $secret | jq --raw-output '.SecretString' | jq -r .password)
           export PGUSER=$(aws secretsmanager get-secret-value --secret-id $secret | jq --raw-output '.SecretString' | jq -r .username)
-          cd /home/ec2-user/aws-samples/online-ticket-demo-store/PostgreSQL/sampledb/v1/
+          cd /home/ec2-user/online-ticket-demo-store/PostgreSQL/sampledb/v1/
           nohup psql --host=${AuroraPGCluster.Endpoint.Address} --port=5432 --dbname=sportstickets -f install-postgresql.sql &
           secret='RedshiftSecret'
           export PGPASSWORD=$(aws secretsmanager get-secret-value --secret-id $secret | jq --raw-output '.SecretString' | jq -r .password)
           export PGUSER=$(aws secretsmanager get-secret-value --secret-id $secret | jq --raw-output '.SecretString' | jq -r .username)
-          cd /home/ec2-user/aws-samples/online-ticket-demo-store/sampledb/v1/
+          cd /home/ec2-user/online-ticket-demo-store/Redshift/sampledb/v1/
           nohup psql --host=${RedshiftCluster.Endpoint.Address} --port=5439 --dbname=sportstickets -f install-redshift.sql &
       Tags:
         - Key: Name
