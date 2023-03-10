@@ -1,13 +1,9 @@
 AWSTemplateFormatVersion: 2010-09-09
 Description: Cloudformation Template for AWS Data Day Italy 30 Marzo 2023
-# Running the following command will configure Quicksight into your account: 
-# aws quicksight create-account-subscription --edition ENTERPRISE --authentication-method IAM_AND_QUICKSIGHT --aws-account-id XXXXXXXXXXXX --account-name quicksight-enterprise-reporting --notification-email XXXXXXXXXX --region us-east-1
 
-####################################################################################################################################
-####################################################################################################################################
-##############################################################Parameters############################################################
-####################################################################################################################################
-####################################################################################################################################
+################
+## Parameters ##
+################
 Parameters:
 
   AwsAccessKeyId:
@@ -21,18 +17,30 @@ Parameters:
   Region:
     Description: Name of the Region es. eu-west-1
     Type: String
-  
-  BHAdminRole:
-    Description: The name of an Admin Role
-    Type: String
     
   ClientPublicIPaddress:
     Description: A single IPv4 address or range of IPv4 addresses with access to Bastion host on public subnet 
     Type: String
     Default: 0.0.0.0/32
 
-  IAMRoleDmsVpcExist:
-    Description: Does your AWS account already have dms-vpc-role(goto IAM>roles & search for "dms-vpc" to check) if this role is not there template will fail-rollback unless you change default Y to N?
+  IAMRoleDmsVpcCreated:
+    Description: Does your AWS account already have dms-vpc-role (goto IAM>roles & search for "dms-vpc" to check) if this role is not there template will fail-rollback unless you change default Y to N?
+    Type: String
+    Default: N
+    AllowedValues:
+      - Y
+      - N
+
+  IAMRoleDmsAccessCreated:
+    Description: Does your AWS account already have dms-access-for-endpoint (goto IAM>roles & search for "dms-access" to check) if this role is not there template will fail-rollback unless you change default Y to N?
+    Type: String
+    Default: N
+    AllowedValues:
+      - Y
+      - N
+
+  IAMRoleDmsCloudWatchCreated:
+    Description: Does your AWS account already have dms-cloudwatch-logs-role (goto IAM>roles & search for "dms-cloudwatch" to check) if this role is not there template will fail-rollback unless you change default Y to N?
     Type: String
     Default: N
     AllowedValues:
@@ -58,15 +66,557 @@ Parameters:
     Type: AWS::EC2::KeyPair::KeyName
     ConstraintDescription: must be the name of an existing EC2 KeyPair.
 
-Conditions:
-  IAMRoleDmsVpcExist: !Equals [!Ref IAMRoleDmsVpcExist, 'N']
+  email:
+    Description: Email address to send anomaly detection events.
+    Type: String
+  
+  Username:
+    Description: The username of the user you want to create in Amazon Cognito.
+    Type: String
+    AllowedPattern: "^(?=\\s*\\S).*$"
+    ConstraintDescription: Cannot be empty
+  
+  Password:
+    Description: The password of the user you want to create in Amazon Cognito. Must be at least 6 alpha-numeric characters, and contain at least one number
+    Type: String
+    NoEcho: true
+    AllowedPattern: "^(?=.*[A-Za-z])(?=.*\\d)[A-Za-z\\d]{6,}$"
+    ConstraintDescription: Must be at least 6 alpha-numeric characters, and contain at least one number  
 
+
+################
+## Conditions ##
+################
+Conditions:
+
+  IAMRoleDmsVpcExist: !Equals [!Ref IAMRoleDmsVpcCreated, 'N']
+
+  IAMRoleDmsAccessExist: !Equals [!Ref IAMRoleDmsAccessCreated, 'N']
+
+  IAMRoleDmsCloudWatchExist: !Equals [!Ref IAMRoleDmsCloudWatchCreated, 'N']
+
+
+##############
+## Metadata ##
+##############
+Metadata:
+
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      -
+        Label:
+          default: "Kinesis Pre Lab set up"
+        Parameters:
+          - "Username"
+          - "Password"
+          - "email"
+
+
+###############
+## Resources ##
+###############
 Resources:
-####################################################################################################################################
-####################################################################################################################################
-##############################################################Amazon S3#############################################################
-####################################################################################################################################
-####################################################################################################################################
+
+##########################################################################
+## Resources supporting elements for the Kinesis Analytics click stream ##
+##########################################################################
+
+  RawS3Bucket:
+    Type: AWS::S3::Bucket
+
+  ProcessedS3Bucket:
+    Type: AWS::S3::Bucket
+
+  FirehoseDeliveryStream:
+    Type: AWS::KinesisFirehose::DeliveryStream
+    Properties:
+      S3DestinationConfiguration:
+        BucketARN: !Sub arn:aws:s3:::${RawS3Bucket}
+        BufferingHints:
+          IntervalInSeconds: 60
+          SizeInMBs: 50
+        CompressionFormat: GZIP
+        Prefix: weblogs/raw/
+        RoleARN: !GetAtt S3Role.Arn
+
+  S3Role:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service: firehose.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                sts:ExternalId: !Ref AWS::AccountId
+      Policies:
+        -
+          PolicyName: S3Access
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              -
+                Effect: Allow
+                Action:
+                  - "s3:*"
+                Resource:
+                  - !Sub arn:aws:s3:::${RawS3Bucket}
+                  - !Sub arn:aws:s3:::${RawS3Bucket}/*
+        -
+          PolicyName: CloudWatch
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              -
+                Effect: Allow
+                Action:
+                  - "cloudwatch:*"
+                  - "cloudwatchlogs:*"
+                Resource:
+                  - "*"
+
+  DataGenCognitoSetupLambdaFunc:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        S3Bucket: !Sub aws-kdg-tools-${AWS::Region}
+        S3Key: datagen-cognito-setup.zip
+      Description: Creates a Cognito User Pool, Identity Pool, and a User.  Returns IDs to be used in the Kinesis Data Generator.
+      FunctionName: KinesisDataGeneratorCognitoSetup
+      Handler: createCognitoPool.createPoolAndUser
+      Role: !GetAtt CognitoLambdaExecutionRole.Arn
+      Runtime: nodejs12.x
+      Timeout: 60
+
+  CognitoLambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+      Policies:
+        -
+          PolicyName: root
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              -
+                Effect: Allow
+                Action:
+                  - logs:*
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*
+              -
+                Effect: Allow
+                Action:
+                  - cognito-idp:AdminConfirmSignUp
+                  - cognito-idp:CreateUserPoolClient
+                  - cognito-idp:AdminCreateUser
+                Resource:
+                  - !Sub arn:aws:cognito-idp:${AWS::Region}:${AWS::AccountId}:userpool/*
+              -
+                Effect: Allow
+                Action:
+                  - cognito-idp:CreateUserPool
+                  - cognito-identity:*
+                Resource: "*"
+              -
+                Effect: Allow
+                Action:
+                  - iam:UpdateAssumeRolePolicy
+                Resource:
+                  - !GetAtt AuthenticatedUserRole.Arn
+                  - !GetAtt UnauthenticatedUserRole.Arn
+              -
+                Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource:
+                  - !GetAtt AuthenticatedUserRole.Arn
+                  - !GetAtt UnauthenticatedUserRole.Arn
+
+  SetupCognitoCustom:
+    Type: Custom::DataGenCognitoSetupLambdaFunc
+    Properties:
+      ServiceToken: !GetAtt DataGenCognitoSetupLambdaFunc.Arn
+      Region: !Ref AWS::Region
+      Username: !Ref Username
+      Password: !Ref Password
+      AuthRoleName: !Ref AuthenticatedUserRole
+      AuthRoleArn: !GetAtt AuthenticatedUserRole.Arn
+      UnauthRoleName: !Ref UnauthenticatedUserRole
+      UnauthRoleArn: !GetAtt UnauthenticatedUserRole.Arn
+
+  AuthenticatedUserRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Federated:
+                - cognito-identity.amazonaws.com
+            Action:
+              - sts:AssumeRoleWithWebIdentity
+      Path: /
+      Policies:
+        -
+          PolicyName: root
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              -
+                Action:
+                  - kinesis:DescribeStream
+                  - kinesis:PutRecord
+                  - kinesis:PutRecords
+                Resource:
+                  - !Sub arn:aws:kinesis:${AWS::Region}:${AWS::AccountId}:stream/*
+                Effect: Allow
+              -
+                Action:
+                  - firehose:DescribeDeliveryStream
+                  - firehose:PutRecord
+                  - firehose:PutRecordBatch
+                Resource:
+                  - !Sub arn:aws:firehose:${AWS::Region}:${AWS::AccountId}:deliverystream/*
+                Effect: Allow
+              -
+                Action:
+                  - mobileanalytics:PutEvents
+                  - cognito-sync:*
+                  - cognito-identity:*
+                  - ec2:DescribeRegions
+                  - firehose:ListDeliveryStreams
+                  - kinesis:ListStreams
+                Resource:
+                  - "*"
+                Effect: Allow
+
+  UnauthenticatedUserRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Federated:
+                - cognito-identity.amazonaws.com
+            Action:
+              - sts:AssumeRoleWithWebIdentity
+      Path: /
+      Policies:
+        -
+          PolicyName: root
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              -
+                Effect: Allow
+                Action:
+                  - mobileanalytics:PutEvents
+                  - cognito-sync:*
+                Resource:
+                  - "*"
+
+  CSELambdaSNSPublishRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        -
+          PolicyName: lambda_sns
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              -
+                Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: !Ref CSEClickStreamEvent
+
+  CSEClickStreamEvent:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: ClkStrEv2
+      Subscription:
+        -
+          Endpoint: !Ref email
+          Protocol: email
+      TopicName: ClickStreamEvent2
+
+  CSEBeconAnomalyResponse:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        ZipFile: !Sub |
+          var AWS = require('aws-sdk');
+          var sns = new AWS.SNS( { region: '${AWS::Region}' });
+          var s3 = new AWS.S3();
+
+          exports.handler = function(event, context) {
+            console.log(JSON.stringify(event, null, 3));
+            event.records.forEach(function(record) {
+              var payload = new Buffer(record.data, 'base64').toString('ascii');
+              var rec = payload.split(',');
+              var ctr = rec[0];
+              var anomaly_score = rec[1];
+              var detail = 'Anomaly detected with a click through rate of ' + ctr + '% and an anomaly score of ' + anomaly_score;
+              var subject = 'Anomaly Detected';
+              var SNSparams = {
+                Message: detail,
+                MessageStructure: 'String',
+                Subject: subject,
+                TopicArn: '${CSEClickStreamEvent}'
+              };
+              sns.publish(SNSparams, function(err, data) {
+                if (err) context.fail(err.stack);
+                else{
+                  var anomaly = [{
+                    'date': Date.now(),
+                    'ctr': ctr,
+                    'anomaly_score': anomaly_score
+                  }]
+
+                  convertArrayOfObjectsToCSV({ data: anomaly }, function(err1, data1){
+                    if(err1) context.fail(err1.stack); // an error occurred
+                    else{
+                      var today = new Date();
+                      var S3params = {
+                        'Bucket': '${ProcessedS3Bucket}',
+                        'Key': `weblogs/processed/${!today.getFullYear()}/${!today.getMonth()}/${!today.getDate()}/${!record.recordId}.csv`,
+                        'Body': data1,
+                        'ContentType': 'text/csv'
+                      }
+                      s3.putObject(S3params, function(err2, data2) {
+                        if (err2) context.fail(err2.stack); // an error occurred
+                        else {
+                          context.succeed('Published Notification'); // successful response
+                        }
+                      })
+                    }
+                  })
+                }
+              });
+            });
+          };
+
+          function convertArrayOfObjectsToCSV(args, callback) {
+            var result, ctr, keys, columnDelimiter, lineDelimiter, data;
+            data = args.data || null;
+            if (data == null || !data.length) {
+              callback(new Error('data is null'));
+            }
+            columnDelimiter = args.columnDelimiter || ',';
+            lineDelimiter = args.lineDelimiter || ',';
+            keys = Object.keys(data[0]);
+            result = '';
+            result += keys.join(columnDelimiter);
+            result += lineDelimiter;
+            data.forEach(function(item) {
+              ctr = 0;
+              keys.forEach(function(key) {
+                  if (ctr > 0) result += columnDelimiter;
+                  result += item[key];
+                      ctr++;
+                  });
+                  result += lineDelimiter;
+            });
+            callback(null, result);
+          }
+      Description: Click Stream Example Lambda Function
+      FunctionName: CSEBeconAnomalyResponse
+      Handler: index.handler
+      MemorySize: 128
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: nodejs12.x
+      Timeout: 5
+
+  CSEKinesisAnalyticsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service:
+                - kinesisanalytics.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        -
+          PolicyName: firehose
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              -
+                Sid: ReadInputFirehose
+                Effect: Allow
+                Action:
+                  - firehose:DescribeDeliveryStream
+                  - firehose:Get*
+                Resource:
+                  - !GetAtt FirehoseDeliveryStream.Arn
+              -
+                Sid: UseLambdaFunction
+                Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                  - lambda:GetFunctionConfiguration
+                Resource:
+                  - !Sub ${CSEBeconAnomalyResponse.Arn}:$LATEST
+
+  DMSLabS3Bucket:
+    Type: AWS::S3::Bucket
+
+  DMSLabS3Policy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: DMSLabS3Policy
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+              - s3:DeleteObject
+            Resource:
+              - !Sub ${DMSLabS3Bucket.Arn}/*
+          -
+            Effect: Allow
+            Action:
+              - s3:ListBucket
+            Resource:
+              - !GetAtt DMSLabS3Bucket.Arn
+      Roles:
+        - !Ref DMSLabRoleS3
+        - !Ref GlueLabRole
+
+  DMSLabRoleS3:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service:
+                - dms.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+
+  GlueLabRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service:
+                - glue.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /service-role/
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+        - arn:aws:iam::aws:policy/AmazonKinesisFullAccess
+      Policies:
+        -
+          PolicyName: DEBucketAccess
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              -
+                Sid: ListDEBucket
+                Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource: arn:aws:s3:::aws-dataengineering-day.workshop.aws
+              -
+                Sid: GetObjectFromDEBucket
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource: arn:aws:s3:::aws-dataengineering-day.workshop.aws/*
+
+  S3BucketWorkgroupA:
+    Type: AWS::S3::Bucket
+
+  S3BucketWorkgroupB:
+    Type: AWS::S3::Bucket
+
+  MyStream: 
+    Type: AWS::Kinesis::Stream 
+    Properties: 
+      Name: TicketTransactionStreamingData 
+      ShardCount: 2   
+
+  GlueDatabase:
+    Type: AWS::Glue::Database
+    Properties: 
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput: 
+        Name: tickettransactiondatabase
+
+  KinesisTableInGlueCatalog:
+    Type: AWS::Glue::Table
+    DependsOn:
+      - GlueDatabase
+      - MyStream
+    Properties: 
+      CatalogId: !Ref AWS::AccountId
+      DatabaseName: !Ref GlueDatabase
+      TableInput: 
+          Name: tickettransactionstreamdata
+          StorageDescriptor:
+            Location: !Ref MyStream
+            Parameters: 
+              typeOfData: kinesis
+              streamARN: !Join ['', ["arn:aws:kinesis:", !Ref AWS::Region, ":", !Ref AWS::AccountId, ":stream/", !Ref MyStream]]
+            InputFormat: org.apache.hadoop.mapred.TextInputFormat
+            OutputFormat: org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat
+            SerdeInfo: 
+              SerializationLibrary: org.openx.data.jsonserde.JsonSerDe
+          Parameters:
+            classification: json
+
+
+############################################################################################
+## Resources supporting elements for the transactional/analytics lab (Aurora+DMS+Redshift ##
+############################################################################################
+
   S3BucketForRawData:
     Type: 'AWS::S3::Bucket'
     Properties:
@@ -90,84 +640,6 @@ Resources:
     Properties:
       BucketName: !Sub "customerprofile-${AWS::AccountId}-${AWS::Region}-awsdataday"
 
-
-####################################################################################################################################
-####################################################################################################################################
-##############################################################AWS Glue#############################################################
-####################################################################################################################################
-####################################################################################################################################
-
-# Create an AWS Glue database
-  AwsForDataDatabase:
-    Type: AWS::Glue::Database
-    Properties:
-      CatalogId: !Ref AWS::AccountId
-      DatabaseInput:
-        # Name: !Ref DatabaseName
-        Description: This database is created by Cloudformation Stack
-
-  MyGlueCrawlerRole:
-    Type: "AWS::IAM::Role"
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service:
-                - glue.amazonaws.com
-            Action:
-              - sts:AssumeRole
-      Policies:
-        - PolicyName: root
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Effect: Allow
-                Action:
-                  - "s3:GetObject"
-                  - "s3:PutObject"
-                Resource:
-                  - !Sub "arn:aws:s3:::${S3BucketForAgentsData}/*"
-                  - !Sub "arn:aws:s3:::${S3BucketForCustomerProfile}/*"
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
-      Path: "/"
-
-  AgentsDataLogCrawler:
-    Type: AWS::Glue::Crawler
-    Properties:
-      Role: !GetAtt MyGlueCrawlerRole.Arn
-      DatabaseName: !Ref AwsForDataDatabase #Using the same Database
-      Targets:
-        S3Targets:
-          - Path: !Sub s3://${S3BucketForAgentsData}/AnalyticsData/
-      TablePrefix: awsfordata-
-      SchemaChangePolicy:
-        UpdateBehavior: "UPDATE_IN_DATABASE"
-        DeleteBehavior: "LOG"
-      Configuration: "{\"Version\":1.0,\"CrawlerOutput\":{\"Partitions\":{\"AddOrUpdateBehavior\":\"InheritFromTable\"},\"Tables\":{\"AddOrUpdateBehavior\":\"MergeNewColumns\"}}}"
-
-  CustomerProfileCrawler:
-    Type: AWS::Glue::Crawler
-    Properties:
-      Role: !GetAtt MyGlueCrawlerRole.Arn
-      DatabaseName: !Ref AwsForDataDatabase #Using the same Database
-      Targets:
-        S3Targets:
-          - Path: !Sub s3://${S3BucketForCustomerProfile}/revenuedb/
-      TablePrefix: awsfordata-
-      SchemaChangePolicy:
-        UpdateBehavior: "UPDATE_IN_DATABASE"
-        DeleteBehavior: "LOG"
-      Configuration: "{\"Version\":1.0,\"CrawlerOutput\":{\"Partitions\":{\"AddOrUpdateBehavior\":\"InheritFromTable\"},\"Tables\":{\"AddOrUpdateBehavior\":\"MergeNewColumns\"}}}"
-# 
-
-####################################################################################################################################
-####################################################################################################################################
-#############################################################Amazon VPC#############################################################
-####################################################################################################################################
-####################################################################################################################################
   PubPrivateVPC:
     Type: 'AWS::EC2::VPC'
     Properties:
@@ -329,12 +801,6 @@ Resources:
       SubnetId: !Ref PrivateSubnet3
       RouteTableId: !Ref PrivateRouteTable
 
-####################################################################################################################################
-####################################################################################################################################
-###########################################################Amazon Redshift##########################################################
-####################################################################################################################################
-####################################################################################################################################
-
   RedshiftSecret:
     Type: AWS::SecretsManager::Secret
     Properties:
@@ -402,7 +868,7 @@ Resources:
                 - "redshift.amazonaws.com"
             Action:
               - "sts:AssumeRole"
-      RoleName: !Sub RedshiftSpectrumS3  
+      RoleName: !Sub ${AWS::StackName}-RedshiftSpectrumS3  
 
   IAMPolicySpectrum:
     Type: AWS::IAM::Policy
@@ -488,6 +954,7 @@ Resources:
 
   DmsVpcRole:
       Type: AWS::IAM::Role
+      Condition: IAMRoleDmsVpcExist
       Properties:
         AssumeRolePolicyDocument:
           Version: "2012-10-17"
@@ -504,6 +971,7 @@ Resources:
 
   DmsCloudwatchLogsRole:
       Type: AWS::IAM::Role
+      Condition: IAMRoleDmsCloudWatchExist
       Properties:
         AssumeRolePolicyDocument:
           Version: "2012-10-17"
@@ -520,6 +988,7 @@ Resources:
   
   DmsAccessForEndpoint:
       Type: AWS::IAM::Role
+      Condition: IAMRoleDmsAccessExist
       Properties:
         AssumeRolePolicyDocument:
           Version: "2012-10-17"
@@ -582,12 +1051,6 @@ Resources:
       - Key: Name
         Value: 'AWSDataDay'
 
-####################################################################################################################################
-####################################################################################################################################
-#########################################################Amazon Aurora PostgreSQL###################################################
-####################################################################################################################################
-####################################################################################################################################
-
   AuroraSecret:
     Type: AWS::SecretsManager::Secret
     Properties:
@@ -599,7 +1062,6 @@ Resources:
         PasswordLength: 16
         ExcludePunctuation: true
 
-## Create DB subnet group
   DBSubnetGroup:
     Type: AWS::RDS::DBSubnetGroup
     Properties:
@@ -719,22 +1181,12 @@ Resources:
       LicenseModel: postgresql-license
       PubliclyAccessible: false
 
-###############################################################################################################
-###############################################################################################################
-#########################################################EC2###################################################
-###############################################################################################################
-###############################################################################################################
-
-  BHInstanceProfile:
-    Type: AWS::IAM::InstanceProfile
-    Properties: 
-      InstanceProfileName: bh-ec2-instance-profile
-      Path: /
-      Roles: 
-       - !Ref BHAdminRole
-
   bastionHost:
     Type: AWS::EC2::Instance
+    DependsOn: 
+      - RepInstance
+      - AuroraPGInstance
+      - RedshiftCluster
     Properties:
       DisableApiTermination: false
       InstanceInitiatedShutdownBehavior: stop
@@ -745,7 +1197,6 @@ Resources:
       InstanceType: "m5.2xlarge"
       KeyName: !Ref KeyName
       SecurityGroupIds: [!Ref PublicSecGroup]
-      IamInstanceProfile: !Ref BHInstanceProfile
       UserData:
         Fn::Base64: !Sub |
           Content-Type: multipart/mixed; boundary="//"
@@ -779,32 +1230,25 @@ Resources:
           yum install -y postgresql14
           yum update -y
           cd /home/ec2-user
-          git clone https://gitlab.aws.dev/aws-for-data1/AWSforDataDayMilan2023Q1.git
+          git clone https://github.com/aws-samples/online-ticket-demo-store.git
           cd /home/ec2-user
-          sudo chown -R ec2-user:ec2-user AWSforDataDayMilan2023Q1/
-          cd AWSforDataDayMilan2023Q1/PostgreSQL/sampledb/v1/
+          sudo chown -R ec2-user:ec2-user aws-samples/
           aws configure set aws_access_key_id ${AwsAccessKeyId}
           aws configure set aws_secret_access_key ${AwsSecretAccessKey}
           echo "region = "${Region} >> /root/.aws/credentials
           secret='AuroraSecret'
           export PGPASSWORD=$(aws secretsmanager get-secret-value --secret-id $secret | jq --raw-output '.SecretString' | jq -r .password)
           export PGUSER=$(aws secretsmanager get-secret-value --secret-id $secret | jq --raw-output '.SecretString' | jq -r .username)
-          cd /home/ec2-user/AWSforDataDayMilan2023Q1/PostgreSQL/sampledb/v1/
+          cd /home/ec2-user/aws-samples/online-ticket-demo-store/PostgreSQL/sampledb/v1/
           nohup psql --host=${AuroraPGCluster.Endpoint.Address} --port=5432 --dbname=sportstickets -f install-postgresql.sql &
           secret='RedshiftSecret'
           export PGPASSWORD=$(aws secretsmanager get-secret-value --secret-id $secret | jq --raw-output '.SecretString' | jq -r .password)
           export PGUSER=$(aws secretsmanager get-secret-value --secret-id $secret | jq --raw-output '.SecretString' | jq -r .username)
-          cd /home/ec2-user/AWSforDataDayMilan2023Q1/Redshift/sampledb/v1/
+          cd /home/ec2-user/aws-samples/online-ticket-demo-store/sampledb/v1/
           nohup psql --host=${RedshiftCluster.Endpoint.Address} --port=5439 --dbname=sportstickets -f install-redshift.sql &
       Tags:
         - Key: Name
           Value: !Sub ${AWS::StackName}-bastion-host
-
-##################################################################################################################
-##################################################################################################################
-#########################################################Lambda###################################################
-##################################################################################################################
-##################################################################################################################
 
   DMSLabCFNS3Bucket:
     Type: 'AWS::S3::Bucket'
@@ -940,6 +1384,41 @@ Resources:
                   - ec2:DescribeNetworkInterfaces
                   - ec2:DeleteNetworkInterface
                 Resource: "*"
+        -
+          PolicyName: CSELambdaExecutionRole
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              -
+                Sid: publish2sns
+                Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource:
+                  - !Ref CSEClickStreamEvent
+              -
+                Sid: writelogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*
+              -
+                Sid: readkinesis
+                Effect: Allow
+                Action:
+                  - kinesis:DescribeStream
+                  - kinesis:GetRecords
+                  - kinesis:GetShardIterator
+                  - kinesis:ListStreams
+                Resource: "*"
+              -
+                Action:
+                  - s3:PutObject
+                Resource: !Sub arn:aws:s3:::${ProcessedS3Bucket}/*
+                Effect: Allow
+                Sid: writeToS3
 
   LambdaRole:
     Type: AWS::IAM::Role
@@ -962,10 +1441,22 @@ Resources:
             Statement:
               - Effect: Allow
                 Action: s3:DeleteObject
-                Resource: !Sub arn:aws:s3:::${DMSLabCFNS3Bucket}/*
+                Resource:
+                  - !Sub arn:aws:s3:::${RawS3Bucket}/*
+                  - !Sub arn:aws:s3:::${ProcessedS3Bucket}/*
+                  - !Sub arn:aws:s3:::${DMSLabCFNS3Bucket}/*
+                  - !Sub arn:aws:s3:::${DMSLabS3Bucket}/*
+                  - !Sub arn:aws:s3:::${S3BucketWorkgroupA}/*
+                  - !Sub arn:aws:s3:::${S3BucketWorkgroupB}/*
               - Effect: Allow
                 Action: s3:ListBucket
-                Resource: !Sub arn:aws:s3:::${DMSLabCFNS3Bucket}
+                Resource:
+                  - !Sub arn:aws:s3:::${RawS3Bucket}
+                  - !Sub arn:aws:s3:::${ProcessedS3Bucket}
+                  - !Sub arn:aws:s3:::${DMSLabCFNS3Bucket}
+                  - !Sub arn:aws:s3:::${DMSLabS3Bucket}
+                  - !Sub arn:aws:s3:::${S3BucketWorkgroupA}
+                  - !Sub arn:aws:s3:::${S3BucketWorkgroupB}
               - Effect: Allow
                 Action: logs:CreateLogGroup
                 Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*
@@ -1010,12 +1501,6 @@ Resources:
       ServiceToken: !GetAtt S3BucketHandler.Arn
       Bucket: !Ref DMSLabCFNS3Bucket
 
-####################################################################################################################################
-####################################################################################################################################
-################################################################DMS#################################################################
-####################################################################################################################################
-####################################################################################################################################
-      
   ReplicationInstanceSubnetGroup:
     Type: AWS::DMS::ReplicationSubnetGroup
     Properties:
@@ -1115,12 +1600,9 @@ Resources:
         TableMappings: "{ \"rules\": [ { \"rule-type\": \"selection\", \"rule-id\": \"1\", \"rule-name\": \"1\", \"object-locator\": { \"schema-name\": \"dms_sample\", \"table-name\": \"%\" }, \"rule-action\": \"include\" } ] }"        
 
 
-####################################################################################################################################
-####################################################################################################################################
-##############################################################Outputs###############################################################
-####################################################################################################################################
-####################################################################################################################################
-
+#############
+## Outputs ##
+#############
 Outputs:
   S3BucketForRawData:
     Description: S3 Bucket Name
@@ -1139,3 +1621,21 @@ Outputs:
     Value: !GetAtt RedshiftCluster.Endpoint.Address
     Export:
       Name: !Sub AWSDataDay-RedshiftClusterEndpointAddress
+  KinesisDataGeneratorUrl:
+    Description: The URL for your Kinesis Data Generator.
+    Value: !Sub https://awslabs.github.io/amazon-kinesis-data-generator/web/producer.html?${SetupCognitoCustom.Querystring}
+  RawBucketName:
+    Description: This the bucket name of where your Raw data will be store at
+    Value: !Ref RawS3Bucket
+  ProcessedBucketName:
+    Description: This the bucket name of where your Processed data will be store at
+    Value: !Ref ProcessedS3Bucket
+  BucketName:
+    Description: S3 Bucket that was created
+    Value: !Ref DMSLabS3Bucket
+  S3BucketWorkgroupA:
+    Description: S3 Bucket for storing workgroup A results
+    Value: !Ref S3BucketWorkgroupA
+  S3BucketWorkgroupB:
+    Description: S3 bucket for storing workgroup B results
+    Value: !Ref S3BucketWorkgroupB
