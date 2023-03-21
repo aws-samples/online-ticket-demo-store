@@ -1,63 +1,62 @@
-
-1,Angel Stadium,Anaheim California,45483,2,45
-2,AT&T Park,San Francisco California,41915,2,41
-3,Busch Stadium,St Louis Missouri,43975,2,43
-4,Chase Field,Phoenix Arizona,48519,2,48
-5,Citi Field,Queens New York,41922,2,41
-6,Citizens Bank Park,Philadelphia Pennsylvania,43651,2,43
-7,Comercia Park,Detroit Michigan,41297,2,41
-8,Coors Field,Denver Colorado,50398,3,50
-9,Dodger Stadium,Los Angeles California,56000,3,56
-10,Fenway Park,Boston Massachusetts,37949,2,37
-11,GLobe Life Park,Arlington Texas,48114,2,48
-12,Great American Ball Park,Cincinnati Ohio,42319,2,42
-13,Kauffman Stadium,Kansas City Missouri,37903,2,37
-14,Martins Park,Miami Florida,36742,2,36
-15,Miller Park,Milwaukee Wisconsin,41900,2,41
-16,Minute Maid Park,Houston Texas,41676,2,41
-17,Nationals Park,Washington D.C.,41313,2,41
-18,Oakland Coliseum,Oakland California,35067,2,35
-19,Camden Yards,Baltimore Maryland,45971,2,45
-20,Petco Park,San Diego California,40162,2,40
-21,PNC Park,Pittsburgh Pennsylvania,38362,2,38
-22,Progressive Field,Cleveland Ohio,35225,2,35
-23,Rogers Centre,Toronto Ontario,49282,2,49
-24,Safeco Field,Seattle Washington,47963,2,47
-25,Target Field,Minneapolis Minnesota,38871,2,38
-26,Tropicana Field,St. Petersburg Florida,31042,2,31
-27,Turner Field,Atlanta Georgia,49586,2,49
-28,US Cellular Field,Chicago Illinois,40615,2,40
-29,Wrigley Field,Chicago Illinois,41268,2,41
-30,Yankee Stadium,Bronx New York,49642,2,49
-31,Los Angeles Memorial Coliseum,"Los Angeles, California",93607,3,93
-32,MetLife Stadium,"East Rutherford, New Jersey",82500,3,82
-33,MetLife Stadium,"East Rutherford, New Jersey",82500,3,82
-34,FedExField,"Landover, Maryland",82000,3,82
-35,Lambeau Field,"Green Bay, Wisconsin",81435,3,81
-36,AT&T Stadium,"Arlington, Texas",80000,3,80
-37,Arrowhead Stadium,"Kansas City, Missouri",76416,3,76
-38,Sports Authority Field at Mile High,"Denver, Colorado",76125,3,76
-39,Bank of America Stadium,"Charlotte, North Carolina",75419,3,75
-40,Mercedes-Benz Superdome,"New Orleans, Louisiana",73000,2,73
-41,NRG Stadium,"Houston, Texas",72220,2,72
-42,New Era Field,"Orchard Park, New York",71870,2,71
-43,Georgia Dome,"Atlanta, Georgia",71250,2,71
-44,M&T Bank Stadium,"Baltimore, Maryland",71008,2,71
-45,Qualcomm Stadium,"San Diego, California",70561,2,70
-46,Lincoln Financial Field,"Philadelphia, Pennsylvania",69596,2,69
-47,Nissan Stadium,"Nashville, Tennessee",69143,2,69
-48,Levi's Stadium,"Santa Clara, California",68500,2,68
-49,Heinz Field,"Pittsburgh, Pennsylvania",68400,2,68
-50,CenturyLink Field,"Seattle, Washington",68000,2,68
-51,FirstEnergy Stadium,"Cleveland, Ohio",67431,2,67
-52,EverBank Field,"Jacksonville, Florida",67246,2,67
-53,Lucas Oil Stadium,"Indianapolis, Indiana",67000,2,67
-54,Gillette Stadium,"Foxborough, Massachusetts",66829,2,66
-55,U.S. Bank Stadium,"Minneapolis, Minnesota",66200,2,66
-56,Raymond James Stadium,"Tampa, Florida",65890,2,65
-57,Paul Brown Stadium,"Cincinnati, Ohio",65515,2,65
-58,Hard Rock Stadium,"Miami Gardens, Florida",65326,2,65
-59,Ford Field,"Detroit, Michigan",65000,2,65
-60,University of Phoenix Stadium,"Glendale, Arizona",63400,2,63
-61,Soldier Field,"Chicago, Illinois",61500,2,61
-62,Oakland Alameda Coliseum,"Oakland, California",56063,2,56
+1;Stadio Giuseppe Meazza;Milano;75.923;2;45
+2;Stadio Olimpico;Roma;73.261;2;41
+3;Stadio San Nicola;Bari;58.270;2;43
+4;Stadio Diego Armando Maradona;Napoli;54.726;2;48
+5;Stadio Artemio Franchi;Firenze;47.282;2;41
+6;Allianz Stadium;Torino;41.507;2;43
+7;Stadio Marcantonio Bentegodi;Verona;39.211;2;41
+8;Stadio San Filippo-Franco Scoglio;Messina;38.722;3;50
+9;Stadio Renato Dall'Ara;Bologna;36.462;3;56
+10;Stadio Renzo Barbera;Palermo;36.365;2;37
+11;Stadio Luigi Ferraris;Genova;36.348;2;48
+12;Stadio Ettore Giardiniero-Via del Mare;Lecce;31.559;2;42
+13;Stadio Arechi;Salerno;29.739;2;37
+14;Stadio Nereo Rocco;Trieste;28.565;2;36
+15;Stadio Olimpico Grande Torino;Torino;28.177;2;41
+16;Stadio Renato Curi;Perugia;28.000;2;41
+17;Stadio Oreste Granillo;Reggio Calabria;26.343;2;41
+18;Stadio Partenio-Adriano Lombardi;Avellino;26.308;2;35
+19;Stadio Friuli;Udine;25.144;2;45
+20;Stadio Pino Zaccheria;Foggia;25.085;2;40
+21;Stadio Nuovo Romagnoli;Campobasso;25.000;2;38
+22;Stadio San Vito Gigi Marulla;Cosenza;24.479;2;35
+23;Orogel Stadium-Dino Manuzzi;Cesena;23.860;2;49
+24;Gewiss Stadium;Bergamo;22.512;2;47
+25;Stadio Ennio Tardini;Parma;22.352;2;38
+26;Stadio Libero Liberati;Terni;22.000;2;31
+27;Stadio Leonardo Garilli;Piacenza;21.668;2;49
+28;Mapei Stadium;Reggio Emilia;21.584;2;40
+29;Stadio Alberto Braglia;Modena;21.151;2;41
+30;Stadio Cino e Lillo Del Duca;Ascoli Piceno;20.550;2;49
+31;Unipol Arena;Casalecchio di Reno;20.000;3;93
+32;Palasport Olimpico;Torino;15.657;3;82
+33;Mediolanum Forum;Assago;12.331;3;82
+34;Palazzo dello Sport;Roma;11.500;3;82
+35;Palazzetto dello Sport;Pesaro;10.323;3;81
+36;PalaCalafiore;Reggio Calabria;8.450;3;80
+37;Virtus Segafredo Arena;Bologna;8.970;3;76
+38;Palazzo a Vela;Torino;8.244;3;76
+39;Modigliani Forum;Livorno;8.033;3;75
+40;PalaSele;Eboli;8.000;2;73
+41;Nelson Mandela Forum;Firenze;7.800;2;72
+42;Palaonda;Bolzano;7.220;2;71
+43;PalaMaggiò;Caserta;7.050;2;71
+44;PalaTrieste;Trieste;6.943;2;71
+45;PalaDesio;Desio;6.700;2;70
+46;PalaFlorio;Bari;6.150;2;69
+47;PalaTupparello;Acireale;6.100;2;69
+48;PalaOlimpia;Verona;6.000;2;68
+49;Palasport Fondo Patti;Palermo;6.000;2;68
+50;PalaGalassi;Forlì;5.676;2;68
+51;PalaDozza;Bologna;5.570;2;67
+52;PalaBarbuto;Napoli;5.500;2;67
+53;Palasport Mens Sana;Siena;5.500;2;67
+54;105 Stadium;Genova;5.500;2;66
+55;Palalido;Milano;5.420;2;66
+56;PalaVerde;Villorba;5.344;2;65
+57;Palasport Giacomo Del Mauro;Avellino;5.300;2;65
+58;PalaLeonessa;Brescia;5.250;2;65
+59;PalaTerme;Montecatini Terme;5.196;2;65
+60;Palasport Lino Oldrini;Varese;5.107;2;63
+61;PalaRossini;Ancona;5.066;2;61
+62;Palazzo Wanny;Firenze;5.000;2;56
