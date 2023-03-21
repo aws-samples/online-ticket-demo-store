@@ -13,21 +13,49 @@ select null as "Creating dms_user user:";
 -- Copying base data
 select null as "Copying base data into tables";
 \copy mlb_data from './data/csv/mlb_data.csv' DELIMITER ',' CSV HEADER;
-\copy name_data from './data/csv/name_data.csv' DELIMITER ',' CSV HEADER;
+\copy name_data from './data/csv/name_data.csv' DELIMITER ';' CSV HEADER;
 \copy nfl_data from './data/csv/nfl_data.csv' DELIMITER ',' CSV HEADER;
 \copy nfl_stadium_data from './data/csv/nfl_stadium_data.csv' DELIMITER ',' CSV HEADER;
 \copy seat_type from './data/csv/seat_type.csv' DELIMITER ',' CSV HEADER;
-\copy sport_location from './data/csv/sport_location.csv' DELIMITER ',' CSV HEADER;
+\copy sport_location from './data/csv/sport_location.csv' DELIMITER ';' CSV HEADER;
 \copy sport_division from './data/csv/sport_division.csv' DELIMITER ',' CSV HEADER;
 \copy sport_league from './data/csv/sport_league.csv' DELIMITER ',' CSV HEADER;
-INSERT /*+ APPEND */ INTO person(id, full_name, last_name, first_name)
+
+INSERT INTO dms_sample.person (id, full_name, last_name, first_name, provincia)
 SELECT row_number() OVER() as rownum
-       ,first.name || ' ' || last.name
-       ,last.name
-       ,first.name 
-FROM   name_data first, name_data last
-WHERE  first.name_type != 'LAST'
-AND    last.name_type  = 'LAST';
+           ,allrows.full_name
+           ,allrows.last_name
+           ,allrows.first_name
+           ,allrows.provincia
+FROM (
+        SELECT first.name || ' ' || last.name as full_name
+                   ,last.name as last_name
+                   ,first.name as first_name
+                   ,prov.name as provincia
+        FROM (
+                 SELECT first.name
+                 FROM dms_sample.name_data first
+                 WHERE  first.name_type not in ('LAST', 'PROVINCIA')
+                 ORDER BY random()
+                 LIMIT 100
+          ) AS first
+        CROSS JOIN (
+                 SELECT last.name
+                 FROM dms_sample.name_data last
+                 WHERE last.name_type  = 'LAST'
+                 ORDER BY random()
+                 LIMIT 100
+          ) AS last
+        CROSS JOIN (
+                 SELECT prov.name
+                 FROM dms_sample.name_data prov
+                 WHERE prov.name_type  = 'PROVINCIA'
+                 ORDER BY random()
+                 LIMIT 100
+          ) AS prov
+    ORDER BY random()
+        LIMIT  50000
+) AS allrows;
 
 -- loading NFL and MLB teams
 select null as "Loading NFL and MLB teams";
