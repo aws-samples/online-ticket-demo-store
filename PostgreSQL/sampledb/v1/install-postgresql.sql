@@ -108,6 +108,18 @@ select generateticketactivity(5000);
 \i ./schema/functions/generatetransferactivity.sql
 select generatetransferactivity(1000);
 
+WITH rows_to_update AS (
+  SELECT *
+  FROM dms_sample.ticket_purchase_hist
+  ORDER BY random()
+  LIMIT (SELECT COUNT(*) * 0.3 FROM dms_sample.ticket_purchase_hist)
+)
+UPDATE dms_sample.ticket_purchase_hist
+SET transaction_date_time = (SELECT TIMESTAMP 'epoch' + (random() * (extract(epoch from TIMESTAMP '2022-12-31 23:59:59' - TIMESTAMP '2020-01-01 00:00:00')) || ' seconds')::interval FROM (SELECT TIMESTAMP '2020-01-01 00:00:00' AS start_time, TIMESTAMP '2022-12-31 23:59:59' AS end_time) AS t)
+FROM rows_to_update
+WHERE dms_sample.ticket_purchase_hist.sporting_event_ticket_id = rows_to_update.sporting_event_ticket_id
+  AND dms_sample.ticket_purchase_hist.purchased_by_id = rows_to_update.purchased_by_id;
+
 -- adding Foreign Keys
 \i ./schema/foreign-keys.sql
 
