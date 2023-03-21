@@ -16,73 +16,67 @@ ON dms_sample.sport_team;
 
 -- ------------ Write DROP-TABLE-stage scripts -----------
 
-DROP TABLE IF EXISTS dms_sample.mlb_data;
+DROP TABLE IF EXISTS dms_sample.mlb_data CASCADE;
 
 
 
-DROP TABLE IF EXISTS dms_sample.name_data;
+DROP TABLE IF EXISTS dms_sample.name_data CASCADE;
 
 
 
-DROP TABLE IF EXISTS dms_sample.nfl_data;
+DROP TABLE IF EXISTS dms_sample.nfl_data CASCADE;
 
 
 
-DROP TABLE IF EXISTS dms_sample.nfl_stadium_data;
+DROP TABLE IF EXISTS dms_sample.nfl_stadium_data CASCADE;
 
 
 
-DROP TABLE IF EXISTS dms_sample.person;
+DROP TABLE IF EXISTS dms_sample.person CASCADE;
 
 
 
-DROP TABLE IF EXISTS dms_sample.player;
+DROP TABLE IF EXISTS dms_sample.player CASCADE;
 
 
 
-DROP TABLE IF EXISTS dms_sample.seat;
+DROP TABLE IF EXISTS dms_sample.seat CASCADE;
 
 
 
-DROP TABLE IF EXISTS dms_sample.seat_type;
+DROP TABLE IF EXISTS dms_sample.seat_type CASCADE;
 
 
 
-DROP TABLE IF EXISTS dms_sample.sporting_event;
+DROP TABLE IF EXISTS dms_sample.sporting_event CASCADE;
 
 
 
-DROP TABLE IF EXISTS dms_sample.sporting_event_ticket;
+DROP TABLE IF EXISTS dms_sample.sporting_event_ticket CASCADE;
 
 
 
-DROP TABLE IF EXISTS dms_sample.sport_division;
+DROP TABLE IF EXISTS dms_sample.sport_division CASCADE;
 
 
 
-DROP TABLE IF EXISTS dms_sample.sport_league;
+DROP TABLE IF EXISTS dms_sample.sport_league CASCADE;
 
 
 
-DROP TABLE IF EXISTS dms_sample.sport_location;
+DROP TABLE IF EXISTS dms_sample.sport_location CASCADE;
 
 
 
-DROP TABLE IF EXISTS dms_sample.sport_team;
+DROP TABLE IF EXISTS dms_sample.sport_team CASCADE;
 
 
 
-DROP TABLE IF EXISTS dms_sample.sport_type;
+DROP TABLE IF EXISTS dms_sample.sport_type CASCADE;
 
 
 
-DROP TABLE IF EXISTS dms_sample.ticket_purchase_hist;
-
-
-
--- ------------ Write CREATE-DATABASE-stage scripts -----------
-
-CREATE SCHEMA IF NOT EXISTS dms_sample;
+DROP TABLE IF EXISTS dms_sample.ticket_purchase_hist CASCADE;
 
 
 -- ------------ Write DROP-SEQUENCE-stage scripts -----------
@@ -104,6 +98,13 @@ DROP SEQUENCE IF EXISTS dms_sample.sport_location_seq;
 
 
 DROP SEQUENCE IF EXISTS dms_sample.sport_team_seq;
+
+
+-- ------------ Write CREATE-DATABASE-stage scripts -----------
+
+DROP SCHEMA dms_sample CASCADE;
+CREATE SCHEMA IF NOT EXISTS dms_sample;
+
 
 -- ------------ Write CREATE-SEQUENCE-stage scripts -----------
 
@@ -187,7 +188,7 @@ OIDS=FALSE
 
 
 CREATE TABLE IF NOT EXISTS dms_sample.name_data(
-name_type CHARACTER VARYING(15) NOT NULL,
+name_type CHARACTER VARYING(30) NOT NULL,
 name CHARACTER VARYING(45) NOT NULL
 )
 WITH (
@@ -237,7 +238,8 @@ CREATE TABLE IF NOT EXISTS dms_sample.person(
 id DOUBLE PRECISION NOT NULL,
 full_name CHARACTER VARYING(60) NOT NULL,
 last_name CHARACTER VARYING(30),
-first_name CHARACTER VARYING(30)
+first_name CHARACTER VARYING(30),
+provincia CHARACTER VARYING(30)
 )
 WITH (
 OIDS=FALSE
@@ -388,7 +390,3 @@ purchase_price NUMERIC(8,2) NOT NULL
 WITH (
 OIDS=FALSE
 );
-
-
-
-
