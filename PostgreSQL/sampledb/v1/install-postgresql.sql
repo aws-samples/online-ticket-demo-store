@@ -108,6 +108,21 @@ select generateticketactivity(5000);
 \i ./schema/functions/generatetransferactivity.sql
 select generatetransferactivity(1000);
 
+-- modify 70% of ticket dates back to 1 year ago
+WITH rows_to_update AS (
+  SELECT sporting_event_ticket_id, purchased_by_id, transaction_date_time
+  FROM dms_sample.ticket_purchase_hist
+  WHERE transaction_date_time >= '2023-01-01 00:00:00'
+  ORDER BY random()
+  LIMIT (SELECT round(COUNT(*) * 0.7) FROM dms_sample.ticket_purchase_hist)
+)
+UPDATE dms_sample.ticket_purchase_hist
+SET transaction_date_time = dms_sample.ticket_purchase_hist.transaction_date_time - interval '1 year'
+FROM rows_to_update
+WHERE dms_sample.ticket_purchase_hist.sporting_event_ticket_id = rows_to_update.sporting_event_ticket_id
+  AND dms_sample.ticket_purchase_hist.purchased_by_id = rows_to_update.purchased_by_id
+  AND dms_sample.ticket_purchase_hist.transaction_date_time = rows_to_update.transaction_date_time;
+
 -- adding Foreign Keys
 \i ./schema/foreign-keys.sql
 
