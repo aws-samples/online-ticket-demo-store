@@ -71,7 +71,8 @@ CREATE TABLE dms_sample.person(
     id double precision NOT NULL,
     full_name character varying(60) NOT NULL,
     last_name character varying(30),
-    first_name character varying(30)
+    first_name character varying(30),
+    provincia character varying(30)
 );
 
 CREATE TABLE dms_sample.player(
